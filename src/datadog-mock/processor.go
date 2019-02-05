@@ -15,6 +15,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -31,7 +32,12 @@ func init() {
 
 var pattern = regexp.MustCompile(`(?P<name>.*?):(?P<value>.*?)\|(?P<type>[a-z])(?:\|#(?P<tags>.*))?`)
 
-func processEvent(event []byte) {
+func processEvent(event []byte){
+	parsed := string(event)
+	fmt.Println(parsed)
+}
+
+func _processEvent(event []byte) {
 	parsed := string(event)
 	match := pattern.FindStringSubmatch(parsed)
 

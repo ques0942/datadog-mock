@@ -18,34 +18,68 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 )
 
+type sink struct {
+	port int
+	done *chan bool
+	inputStreamConn *net.UDPConn
+	outputFunc func([]byte)
+}
+
+type Sink interface {
+	Port() int
+	Run()
+	Close()
+}
+
+// BufferSize is upper boundary of UDP receive window
+const BufferSize int = 1024
+
 // NewSink creates new UDP sink with channel for complete events
-func NewSink() *sink {
-	return &sink{event: make(chan []byte)}
+func NewSink(port int, outputFunc func([]byte)) Sink {
+	done := make(chan bool)
+	return &sink{done: &done, port: port, outputFunc: outputFunc}
+}
+
+func (s *sink) Port() int {
+	return s.port
 }
 
 // Run starts UDP sink with UPD stream source
-func (r *sink) Run(addr *net.UDPAddr) {
-	inputStreamConn, err := net.ListenUDP("udp", addr)
+func (s *sink) Run() {
+	stream, err := net.ResolveUDPAddr("udp", ":" + strconv.Itoa(s.port))
+	inputStreamConn, err := net.ListenUDP("udp", stream)
 
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
-	defer inputStreamConn.Close()
+	s.inputStreamConn = inputStreamConn
 
 	buf := make([]byte, BufferSize)
+	for {
+		n, _, err := s.inputStreamConn.ReadFromUDP(buf)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
 
-forever:
-	n, _, err := inputStreamConn.ReadFromUDP(buf)
-	if err != nil {
-		fmt.Println(err)
-		goto forever
+		go s.outputFunc(buf[0:n])
+
+		select {
+		case _, ok := <- *s.done:
+			if !ok {
+				fmt.Println("close")
+				break
+			}
+		default:
+		}
 	}
+}
 
-	r.event <- buf[0:n]
-
-	goto forever
+func (s *sink) Close() {
+	s.inputStreamConn.Close()
+	close(*s.done)
 }

@@ -16,24 +16,94 @@ package main
 
 import (
 	"fmt"
-	"net"
+	"github.com/vmihailenco/msgpack"
+	"io/ioutil"
+	"net/http"
 	"os"
+	"strconv"
 )
 
-func main() {
-	fmt.Println("Starting DataDog Mock Server")
+func main(){
+	os.Exit(realMain())
+}
 
-	stream, err := net.ResolveUDPAddr("udp", ":8125")
-
+func realMain() int {
+	// FIXME arg handling
+	udpPorts := os.Args[1:2]
+	sinks, err := start(udpPorts)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return 1
+	}
+	for i, _ := range sinks {
+		defer sinks[i].Close()
 	}
 
-	relay := NewSink()
-	go relay.Run(stream)
+	// FIXME arg handling
+	httpPorts := os.Args[2:3]
+	httpErr := httpStart(httpPorts)
+	if httpErr != nil {
+		fmt.Println(err)
+		return 1
+	}
 
-forever:
-	go processEvent(<-relay.event)
-	goto forever
+	// FIXME signal handling
+	c := make(chan []bool)
+	<- c
+	return 0
+}
+
+func start(ports []string) ([]Sink, error) {
+	var sinks []Sink
+
+	// TODO customize function
+	f := func(event []byte) {
+		fmt.Println(string(event))
+	}
+	for _, portStr := range ports {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			for i, _ := range sinks {
+				sinks[i].Close()
+			}
+			return []Sink{}, err
+		}
+		sink := NewSink(port, f)
+		sinks = append(sinks, sink)
+	}
+	for i, _ := range sinks {
+		fmt.Println("Starting DataDog Mock Server: " + strconv.Itoa(sinks[i].Port()))
+		go sinks[i].Run()
+	}
+	return sinks, nil
+}
+
+// yattsuke
+func httpStart(ports []string) error {
+
+	// TODO customize function
+	http.HandleFunc("/v0.3/traces", func(w http.ResponseWriter, r *http.Request){
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		var bodyMsg interface{}
+		parseErr := msgpack.Unmarshal(body, &bodyMsg)
+		if parseErr != nil {
+			fmt.Println(parseErr)
+			return
+		}
+		fmt.Println(bodyMsg)
+	})
+	for _, port := range ports {
+		go func(port string) {
+			fmt.Println("Starting DataDog Mock Server: " + port)
+			err := http.ListenAndServe(":"+port, nil)
+			if err != nil {
+				panic(err)
+			}
+		}(port)
+	}
+	return nil
 }
