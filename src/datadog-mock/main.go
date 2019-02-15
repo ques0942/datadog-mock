@@ -15,11 +15,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/vmihailenco/msgpack"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 )
 
@@ -27,10 +29,38 @@ func main(){
 	os.Exit(realMain())
 }
 
+var pattern = regexp.MustCompile(`(?P<name>.*?):(?P<value>.*?)\|(?P<type>[a-z])(\|(?P<sample_rate>\d+(\.\d+)?))?(?:\|#(?P<tags>.*))?`)
+
+func parseEvent(event []byte) (map[string]string, error){
+	parsed := string(event)
+	match := pattern.FindStringSubmatch(parsed)
+	if len(match) < 3 {
+		return nil, fmt.Errorf("parse error: %s", event)
+	}
+	result := make(map[string]string)
+	for i, name := range pattern.SubexpNames() {
+		if i != 0 && name != "" {
+			result[name] = match[i]
+		}
+	}
+	return result, nil
+
+}
+
+
+
 func realMain() int {
 	// FIXME arg handling
 	udpPorts := os.Args[1:2]
-	sinks, err := start(udpPorts)
+	outFunc := func(event []byte){
+		parsedEvent, err := parseEvent(event)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println(parsedEvent)
+		}
+	}
+	sinks, err := start(udpPorts, outFunc)
 	if err != nil {
 		fmt.Println(err)
 		return 1
@@ -53,13 +83,9 @@ func realMain() int {
 	return 0
 }
 
-func start(ports []string) ([]Sink, error) {
+func start(ports []string, outFunc func([]byte)) ([]Sink, error) {
 	var sinks []Sink
 
-	// TODO customize function
-	f := func(event []byte) {
-		fmt.Println(string(event))
-	}
 	for _, portStr := range ports {
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
@@ -68,7 +94,7 @@ func start(ports []string) ([]Sink, error) {
 			}
 			return []Sink{}, err
 		}
-		sink := NewSink(port, f)
+		sink := NewSink(port, outFunc)
 		sinks = append(sinks, sink)
 	}
 	for i, _ := range sinks {
@@ -88,13 +114,18 @@ func httpStart(ports []string) error {
 			fmt.Println(err)
 			return
 		}
-		var bodyMsg interface{}
-		parseErr := msgpack.Unmarshal(body, &bodyMsg)
+		var bodyMap interface{}
+		parseErr := msgpack.Unmarshal(body, &bodyMap)
 		if parseErr != nil {
 			fmt.Println(parseErr)
 			return
 		}
-		fmt.Println(bodyMsg)
+		bodyJsonByte, err := json.Marshal(bodyMap)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(string(bodyJsonByte))
 	})
 	for _, port := range ports {
 		go func(port string) {
