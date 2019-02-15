@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -25,7 +26,7 @@ type sink struct {
 	port int
 	done *chan bool
 	inputStreamConn *net.UDPConn
-	outputFunc func([]byte)
+	outputFunc func(event DDStatsEvent)
 }
 
 type Sink interface {
@@ -37,8 +38,29 @@ type Sink interface {
 // BufferSize is upper boundary of UDP receive window
 const BufferSize int = 1024
 
+var sinkLogger *log.Logger
+var sinkErrLogger *log.Logger
+
+type DDStatsEvent = interface{}
+type DDEvent = interface {}
+
+func parseEvent(event []byte) (DDStatsEvent, error){
+	parsed := string(event)
+	match := pattern.FindStringSubmatch(parsed)
+	if len(match) < 3 {
+		return nil, fmt.Errorf("parse error: %s", event)
+	}
+	result := make(map[string]string)
+	for i, name := range pattern.SubexpNames() {
+		if i != 0 && name != "" {
+			result[name] = match[i]
+		}
+	}
+	return result, nil
+}
+
 // NewSink creates new UDP sink with channel for complete events
-func NewSink(port int, outputFunc func([]byte)) Sink {
+func NewSink(port int, outputFunc func(event DDStatsEvent)) Sink {
 	done := make(chan bool)
 	return &sink{done: &done, port: port, outputFunc: outputFunc}
 }
@@ -62,16 +84,21 @@ func (s *sink) Run() {
 	for {
 		n, _, err := s.inputStreamConn.ReadFromUDP(buf)
 		if err != nil {
-			fmt.Println(err)
+			sinkErrLogger.Println(err)
 			continue
 		}
 
-		go s.outputFunc(buf[0:n])
+		event, err := parseEvent(buf[0:n])
+		if err != nil {
+			sinkErrLogger.Println(err)
+		}
+
+		go s.outputFunc(event)
 
 		select {
 		case _, ok := <- *s.done:
 			if !ok {
-				fmt.Println("close")
+				sinkLogger.Printf("port %d close\n", s.port)
 				break
 			}
 		default:

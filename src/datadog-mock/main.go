@@ -15,24 +15,54 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"github.com/vmihailenco/msgpack"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 )
+
+func init() {
+	sinkLogger = log.New(os.Stdout, "", log.Lmicroseconds)
+	sinkLogger = log.New(os.Stderr, "", log.Lmicroseconds)
+}
+
+var mainLogger = log.New(os.Stdout, "", log.Lmicroseconds)
+var mainErrLogger = log.New(os.Stdout, "", log.Lmicroseconds)
 
 func main(){
 	os.Exit(realMain())
 }
 
+var pattern = regexp.MustCompile(`(?P<name>.*?):(?P<value>.*?)\|(?P<type>[a-z])(\|(?P<sample_rate>\d+(\.\d+)?))?(?:\|#(?P<tags>.*))?`)
+
+func defaultDDStatsFunc(event DDEvent){
+	bodyJsonByte, err := json.Marshal(event)
+	if err != nil {
+		mainLogger.Println(err)
+		return
+	}
+	mainLogger.Println(string(bodyJsonByte))
+}
+
+func defaultDDFunc(event DDEvent){
+	bodyJsonByte, err := json.Marshal(event)
+	if err != nil {
+		mainLogger.Println(err)
+		return
+	}
+	mainLogger.Println(string(bodyJsonByte))
+}
+
 func realMain() int {
 	// FIXME arg handling
 	udpPorts := os.Args[1:2]
-	sinks, err := start(udpPorts)
+	outFunc := defaultDDStatsFunc
+	sinks, err := start(udpPorts, outFunc)
 	if err != nil {
-		fmt.Println(err)
 		return 1
 	}
 	for i, _ := range sinks {
@@ -41,9 +71,9 @@ func realMain() int {
 
 	// FIXME arg handling
 	httpPorts := os.Args[2:3]
-	httpErr := httpStart(httpPorts)
+	httpErr := httpStart(httpPorts, defaultDDFunc)
 	if httpErr != nil {
-		fmt.Println(err)
+		mainErrLogger.Println(err)
 		return 1
 	}
 
@@ -53,13 +83,9 @@ func realMain() int {
 	return 0
 }
 
-func start(ports []string) ([]Sink, error) {
+func start(ports []string, outFunc func(DDStatsEvent)) ([]Sink, error) {
 	var sinks []Sink
 
-	// TODO customize function
-	f := func(event []byte) {
-		fmt.Println(string(event))
-	}
 	for _, portStr := range ports {
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
@@ -68,37 +94,37 @@ func start(ports []string) ([]Sink, error) {
 			}
 			return []Sink{}, err
 		}
-		sink := NewSink(port, f)
+		sink := NewSink(port, outFunc)
 		sinks = append(sinks, sink)
 	}
 	for i, _ := range sinks {
-		fmt.Println("Starting DataDog Mock Server: " + strconv.Itoa(sinks[i].Port()))
+		mainLogger.Println("Starting DataDog Mock Server: " + strconv.Itoa(sinks[i].Port()))
 		go sinks[i].Run()
 	}
 	return sinks, nil
 }
 
 // yattsuke
-func httpStart(ports []string) error {
+func httpStart(ports []string, outFunc func(event DDEvent)) error {
 
 	// TODO customize function
-	http.HandleFunc("/v0.3/traces", func(w http.ResponseWriter, r *http.Request){
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		var bodyMsg interface{}
-		parseErr := msgpack.Unmarshal(body, &bodyMsg)
+	http.HandleFunc("/v0.3/traces", func(writer http.ResponseWriter, request *http.Request) {
+		bodyByte, err := ioutil.ReadAll(request.Body)
+		var event DDEvent
+		parseErr := msgpack.Unmarshal(bodyByte, &event)
 		if parseErr != nil {
-			fmt.Println(parseErr)
+			mainLogger.Println(parseErr)
 			return
 		}
-		fmt.Println(bodyMsg)
+		if err != nil {
+			mainLogger.Println(err)
+			return
+		}
+		outFunc(event)
 	})
 	for _, port := range ports {
 		go func(port string) {
-			fmt.Println("Starting DataDog Mock Server: " + port)
+			mainLogger.Println("Starting DataDog Mock Server: " + port)
 			err := http.ListenAndServe(":"+port, nil)
 			if err != nil {
 				panic(err)
