@@ -74,19 +74,27 @@ func realMain() int {
 	var tcpPortStrs arrayFlags
 	flag.Var(&tcpPortStrs, "tcp", "tcp port")
 	flag.Parse()
-
-	sinks, err := start(udpPortStrs, defaultDDStatsDFunc)
-	if err != nil {
+	if len(udpPortStrs) == 0 && len(tcpPortStrs) == 0 {
+		flag.Usage()
 		return 1
 	}
-	for i := range sinks {
-		defer sinks[i].Close()
+
+	if len(udpPortStrs) > 0 {
+		sinks, err := start(udpPortStrs, defaultDDStatsDFunc)
+		if err != nil {
+			return 1
+		}
+		for i := range sinks {
+			defer sinks[i].Close()
+		}
 	}
 
-	httpErr := httpStart(tcpPortStrs, defaultDDFunc)
-	if httpErr != nil {
-		mainErrLogger.Println(err)
-		return 1
+	if len(tcpPortStrs) > 0 {
+		httpErr := httpStart(tcpPortStrs, defaultDDFunc)
+		if httpErr != nil {
+			mainErrLogger.Println(httpErr)
+			return 1
+		}
 	}
 
 	// FIXME signal handling
