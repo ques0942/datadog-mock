@@ -16,13 +16,15 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/vmihailenco/msgpack"
+	"flag"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
+	"strings"
+
+	"github.com/vmihailenco/msgpack"
 )
 
 func init() {
@@ -33,45 +35,55 @@ func init() {
 var mainLogger = log.New(os.Stdout, "", log.Lmicroseconds)
 var mainErrLogger = log.New(os.Stdout, "", log.Lmicroseconds)
 
-func main(){
+func main() {
 	os.Exit(realMain())
 }
 
-var pattern = regexp.MustCompile(`(?P<name>.*?):(?P<value>.*?)\|(?P<type>[a-z])(\|(?P<sample_rate>\d+(\.\d+)?))?(?:\|#(?P<tags>.*))?`)
-
-func defaultDDStatsFunc(event DDEvent){
-	bodyJsonByte, err := json.Marshal(event)
+func defaultDDStatsDFunc(event DDStatsDEvent) {
+	bodyJSONByte, err := json.Marshal(event)
 	if err != nil {
 		mainLogger.Println(err)
 		return
 	}
-	mainLogger.Println(string(bodyJsonByte))
+	mainLogger.Println(string(bodyJSONByte))
 }
 
-func defaultDDFunc(event DDEvent){
-	bodyJsonByte, err := json.Marshal(event)
+func defaultDDFunc(event DDEvent) {
+	bodyJSONByte, err := json.Marshal(event)
 	if err != nil {
 		mainLogger.Println(err)
 		return
 	}
-	mainLogger.Println(string(bodyJsonByte))
+	mainLogger.Println(string(bodyJSONByte))
+}
+
+type arrayFlags []string
+
+func (f *arrayFlags) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *arrayFlags) Set(value string) error {
+	*f = append(*f, value)
+	return nil
 }
 
 func realMain() int {
-	// FIXME arg handling
-	udpPorts := os.Args[1:2]
-	outFunc := defaultDDStatsFunc
-	sinks, err := start(udpPorts, outFunc)
+	var udpPortStrs arrayFlags
+	flag.Var(&udpPortStrs, "udp", "udp port")
+	var tcpPortStrs arrayFlags
+	flag.Var(&tcpPortStrs, "tcp", "tcp port")
+	flag.Parse()
+
+	sinks, err := start(udpPortStrs, defaultDDStatsDFunc)
 	if err != nil {
 		return 1
 	}
-	for i, _ := range sinks {
+	for i := range sinks {
 		defer sinks[i].Close()
 	}
 
-	// FIXME arg handling
-	httpPorts := os.Args[2:3]
-	httpErr := httpStart(httpPorts, defaultDDFunc)
+	httpErr := httpStart(tcpPortStrs, defaultDDFunc)
 	if httpErr != nil {
 		mainErrLogger.Println(err)
 		return 1
@@ -79,17 +91,17 @@ func realMain() int {
 
 	// FIXME signal handling
 	c := make(chan []bool)
-	<- c
+	<-c
 	return 0
 }
 
-func start(ports []string, outFunc func(DDStatsEvent)) ([]Sink, error) {
+func start(ports []string, outFunc func(DDStatsDEvent)) ([]Sink, error) {
 	var sinks []Sink
 
 	for _, portStr := range ports {
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
-			for i, _ := range sinks {
+			for i := range sinks {
 				sinks[i].Close()
 			}
 			return []Sink{}, err
@@ -97,17 +109,14 @@ func start(ports []string, outFunc func(DDStatsEvent)) ([]Sink, error) {
 		sink := NewSink(port, outFunc)
 		sinks = append(sinks, sink)
 	}
-	for i, _ := range sinks {
-		mainLogger.Println("Starting DataDog Mock Server: " + strconv.Itoa(sinks[i].Port()))
+	for i := range sinks {
+		mainLogger.Println("Starting DataDog StatsD Mock Server: " + strconv.Itoa(sinks[i].Port()))
 		go sinks[i].Run()
 	}
 	return sinks, nil
 }
 
-// yattsuke
 func httpStart(ports []string, outFunc func(event DDEvent)) error {
-
-	// TODO customize function
 	http.HandleFunc("/v0.3/traces", func(writer http.ResponseWriter, request *http.Request) {
 		bodyByte, err := ioutil.ReadAll(request.Body)
 		var event DDEvent

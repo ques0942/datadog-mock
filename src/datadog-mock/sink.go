@@ -18,17 +18,18 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
+	"regexp"
 	"strconv"
 )
 
 type sink struct {
-	port int
-	done *chan bool
+	port            int
+	done            *chan bool
 	inputStreamConn *net.UDPConn
-	outputFunc func(event DDStatsEvent)
+	outputFunc      func(event DDStatsDEvent)
 }
 
+// Sink is UDPSink
 type Sink interface {
 	Port() int
 	Run()
@@ -41,10 +42,15 @@ const BufferSize int = 1024
 var sinkLogger *log.Logger
 var sinkErrLogger *log.Logger
 
-type DDStatsEvent = interface{}
-type DDEvent = interface {}
+// DDStatsDEvent is Datadog StatsD event
+type DDStatsDEvent = interface{}
 
-func parseEvent(event []byte) (DDStatsEvent, error){
+// DDEvent is Datadog message pack event
+type DDEvent = interface{}
+
+var pattern = regexp.MustCompile(`(?P<name>.*?):(?P<value>.*?)\|(?P<type>[a-z])(\|(?P<sample_rate>\d+(\.\d+)?))?(?:\|#(?P<tags>.*))?`)
+
+func parseEvent(event []byte) (DDStatsDEvent, error) {
 	parsed := string(event)
 	match := pattern.FindStringSubmatch(parsed)
 	if len(match) < 3 {
@@ -60,7 +66,7 @@ func parseEvent(event []byte) (DDStatsEvent, error){
 }
 
 // NewSink creates new UDP sink with channel for complete events
-func NewSink(port int, outputFunc func(event DDStatsEvent)) Sink {
+func NewSink(port int, outputFunc func(event DDStatsDEvent)) Sink {
 	done := make(chan bool)
 	return &sink{done: &done, port: port, outputFunc: outputFunc}
 }
@@ -71,12 +77,16 @@ func (s *sink) Port() int {
 
 // Run starts UDP sink with UPD stream source
 func (s *sink) Run() {
-	stream, err := net.ResolveUDPAddr("udp", ":" + strconv.Itoa(s.port))
+	stream, err := net.ResolveUDPAddr("udp", ":"+strconv.Itoa(s.port))
+	if err != nil {
+		sinkErrLogger.Println(err)
+		return
+	}
 	inputStreamConn, err := net.ListenUDP("udp", stream)
 
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		sinkErrLogger.Println(err)
+		return
 	}
 	s.inputStreamConn = inputStreamConn
 
@@ -96,7 +106,7 @@ func (s *sink) Run() {
 		go s.outputFunc(event)
 
 		select {
-		case _, ok := <- *s.done:
+		case _, ok := <-*s.done:
 			if !ok {
 				sinkLogger.Printf("port %d close\n", s.port)
 				break
@@ -107,6 +117,8 @@ func (s *sink) Run() {
 }
 
 func (s *sink) Close() {
-	s.inputStreamConn.Close()
+	if err := s.inputStreamConn.Close(); err != nil {
+		sinkErrLogger.Println(err)
+	}
 	close(*s.done)
 }
