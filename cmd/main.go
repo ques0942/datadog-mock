@@ -48,11 +48,27 @@ func defaultDDStatsDFunc(event DDStatsDEvent) {
 	mainLogger.Println(string(bodyJSONByte))
 }
 
+func ppDDStatsDFunc(event DDStatsDEvent) {
+	bodyJSONByte, err := json.MarshalIndent(event, "", "    ")
+	if err != nil {
+		mainLogger.Println(err)
+	}
+	mainLogger.Println(string(bodyJSONByte))
+}
+
 func defaultDDFunc(event DDEvent) {
 	bodyJSONByte, err := json.Marshal(event)
 	if err != nil {
 		mainLogger.Println(err)
 		return
+	}
+	mainLogger.Println(string(bodyJSONByte))
+}
+
+func ppDDFunc(event DDEvent) {
+	bodyJSONByte, err := json.MarshalIndent(event, "", "    ")
+	if err != nil {
+		mainLogger.Println(err)
 	}
 	mainLogger.Println(string(bodyJSONByte))
 }
@@ -69,6 +85,8 @@ func (f *arrayFlags) Set(value string) error {
 }
 
 func realMain() int {
+	var prettyPrint bool
+	flag.BoolVar(&prettyPrint, "pp", false, "pretty print")
 	var udpPortStrs arrayFlags
 	flag.Var(&udpPortStrs, "udp", "udp port")
 	var tcpPortStrs arrayFlags
@@ -78,9 +96,18 @@ func realMain() int {
 		flag.Usage()
 		return 1
 	}
+	var ddStatsDOutFunc func(event DDStatsDEvent)
+	var ddOutFunc func(event DDEvent)
+	if prettyPrint {
+		ddStatsDOutFunc = ppDDStatsDFunc
+		ddOutFunc = ppDDFunc
+	} else {
+		ddStatsDOutFunc = defaultDDStatsDFunc
+		ddOutFunc = defaultDDFunc
+	}
 
 	if len(udpPortStrs) > 0 {
-		sinks, err := start(udpPortStrs, defaultDDStatsDFunc)
+		sinks, err := start(udpPortStrs, ddStatsDOutFunc)
 		if err != nil {
 			return 1
 		}
@@ -90,7 +117,7 @@ func realMain() int {
 	}
 
 	if len(tcpPortStrs) > 0 {
-		httpErr := httpStart(tcpPortStrs, defaultDDFunc)
+		httpErr := httpStart(tcpPortStrs, ddOutFunc)
 		if httpErr != nil {
 			mainErrLogger.Println(httpErr)
 			return 1
